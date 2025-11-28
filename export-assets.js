@@ -1,193 +1,157 @@
-// export-assets.js
-
-import fetch from 'node-fetch';
+import axios from 'axios';
 import { promises as fs } from 'fs';
 import path from 'path';
 import pLimit from 'p-limit';
+import https from 'https';
 import CONSTANTS from "./constants.js";
+import fsStandard from 'fs';
 
-// Do not process the contents of these well-known AEM system folders
-const SKIP_FOLDERS = ['/content/dam/appdata', '/content/dam/projects', '/content/dam/_CSS', '/content/dam/_DMSAMPLE' ];
-
-/**
- * Determine if the folder should be processed based on the entity and AEM path.
- *
- * @param {Object} entity the AEM entity that should represent a folder returned from AEM Assets HTTP API
- * @param {String} aemPath the path in AEM of this source
- * @returns true if the entity should be processed, false otherwise
- */
-function isValidFolder(entity, aemPath) {
-    if (aemPath === '/content/dam') {
-        return true;
-    } else if (!entity.class.includes('assets/folder')) {
-        return false;
-    } else if (SKIP_FOLDERS.find((path) => path === aemPath)) {
-        return false;
-    } else if (entity.properties.hidden) {
-        return false;
-    }
-
-    return true;
-}
-
-/**
- * Determine if the entity is downloadable.
- * @param {Object} entity the AEM entity that should represent an asset returned from AEM Assets HTTP API
- * @returns true if the entity is downloadable, false otherwise
- */
-function isDownloadable(entity) {
-    if (entity.class.includes('assets/folder')) {
-        return false;
-    } else if (entity.properties.contentFragment) {
-        return false;
-    }
-    return true;
-}
-
-/**
- * Helper function to get the link from the entity based on the relationship name.
- * @param {Object} entity the entity from the AEM Assets HTTP API
- * @param {String} rel the relationship name
- * @returns {String} link URL
- */
-function getLink(entity, rel) {
-    return entity.links.find(link => link.rel.includes(rel));
-}
-
-/**
- * Helper function to fetch JSON data from the AEM Assets HTTP API.
- * @param {String} url the AEM Assets HTTP API URL to fetch data from
- * @returns {Object} the JSON response
- */
-async function fetchJSON(url) {
-    const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-            'Authorization': `Bearer ${AEM_ACCESS_TOKEN}`,
-            'Content-Type': 'application/json'
-        }
-    });
-
-    if (!response.ok) {
-        throw new Error(`Error fetching ${url}: ${response.status}`);
-    }
-
-    return response.json();
-}
-
-/**
- * Helper function to download a file from AEM Assets.
- * @param {String} url the URL of the asset rendition to download
- * @param {String} outputPath the local path to save the downloaded file
- */
-async function downloadFile(url, outputPath) {
-    const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-            'Authorization': `Bearer ${AEM_ACCESS_TOKEN}`,
-        }
-    });
-
-    if (!response.ok) {
-        throw new Error(`Failed to download file: ${response.statusText}`);
-    }
-
-    const arrayBuffer = await response.arrayBuffer();
-    await fs.writeFile(outputPath, Buffer.from(arrayBuffer));
-
-    console.log(`Downloaded asset: ${outputPath}`);
-}
-
-/**
- * Main entry point to download assets from AEM.
- *
- * @param {Object} options
- * @param {String} options.apiUrl (optional) the direct AEM Assets HTTP API URL
- * @param {String} options.localPath local filesystem path to save the assets
- * @param {String} options.aemPath AEM folder path
- */
-async function downloadAssets({ apiUrl, localPath = LOCAL_DOWNLOAD_FOLDER, aemPath = '/content/dam' }) {
-    if (!apiUrl) {
-        const prefix = "/content/dam/";
-        let apiPath = aemPath.startsWith(prefix) ? aemPath.substring(prefix.length) : aemPath;
-
-        if (!apiPath.startsWith('/')) {
-            apiPath = '/' + apiPath;
-        }
-
-        apiUrl = `${AEM_HOST}/api/assets.json${apiPath}`;
-    }
-
-    const data = await fetchJSON(apiUrl);
-    const entities = data.entities || [];
-
-    // First, process folders
-    for (const folder of entities.filter(entity => entity.class.includes('assets/folder'))) {
-        const newLocalPath = path.join(localPath, folder.properties.name);
-        const newAemPath = path.join(aemPath, folder.properties.name);
-
-        if (!isValidFolder(folder, newAemPath)) {
-            continue;
-        }
-
-        await fs.mkdir(newLocalPath, { recursive: true });
-
-        await downloadAssets({
-            apiUrl: getLink(folder, 'self')?.href,
-            localPath: newLocalPath,
-            aemPath: newAemPath
-        });
-    }
-
-    // Now, process assets with concurrency limit
-    const limit = pLimit(MAX_CONCURRENT_DOWNLOADS);
-    const downloads = [];
-
-    for (const asset of entities.filter(entity => entity.class.includes('assets/asset'))) {
-        const assetLocalPath = path.join(localPath, asset.properties.name);
-        if (isDownloadable(asset)) {
-            downloads.push(limit(() => downloadFile(getLink(asset, 'content')?.href, assetLocalPath)));
-        }
-    }
-
-    await Promise.all(downloads);
-
-    // Handle pagination
-    const nextUrl = getLink(data, 'next');
-    if (nextUrl) {
-        await downloadAssets({
-            apiUrl: nextUrl?.href,
-            localPath,
-            aemPath
-        });
-    }
-}
-
-/***** SCRIPT CONFIGURATION *****/
-
-// AEM host is the URL of the AEM environment to download the assets from
+// --- Configuration ---
 const AEM_HOST = CONSTANTS.AEM_HOST;
+const AEM_USER = CONSTANTS.AEM_USER;
+const AEM_PASS = CONSTANTS.AEM_PASS;
+const ASSET_OUTPUT_DIR = 'aem_export_assets'; // New dedicated folder for assets
+const CONCURRENCY_LIMIT = 5; 
 
-// AEM access token used to access the AEM host.
-// This access token must have read access to the folders and assets to download.
-const AEM_ACCESS_TOKEN = CONSTANTS.AEM_ACCESS_TOKEN;
+// This QueryBuilder query targets DAM assets
+const ASSET_QUERY_PARAMS = {
+  // ⬅️ Set this to your project's Asset Root
+  'path': '/content/dam/wm', 
+  // ⬅️ The primary node type for AEM Assets
+  'type': 'dam:Asset',           
+  'p.limit': -1,                 
+  // ⬅️ We need full metadata for transformation and file names
+  'p.hits': 'full'              
+};
+// ---------------------
 
-// The root folder in AEM to download assets from.
-const AEM_ASSETS_FOLDER = CONSTANTS.AEM_ASSETS_FOLDER;
+// Initialize the concurrency limiter
+const limit = pLimit(CONCURRENCY_LIMIT);
 
-// The local folder to save the downloaded assets.
-const LOCAL_DOWNLOAD_FOLDER = CONSTANTS.LOCAL_DOWNLOAD_FOLDER;
+// Create a pre-configured axios instance for AEM requests
+const aemClient = axios.create({
+  baseURL: AEM_HOST,
+  auth: {
+    username: AEM_USER,
+    password: AEM_PASS
+  },
+  // Ignore self-signed certs (if using HTTPS)
+  httpsAgent: new https.Agent({
+    rejectUnauthorized: false
+  })
+});
 
-// The number of maximum concurrent downloads to avoid overwhelming the client or server.
-const MAX_CONCURRENT_DOWNLOADS = CONSTANTS.MAX_CONCURRENT_DOWNLOADS;
+/**
+ * Executes the download for a single asset binary file.
+ */
+/**
+ * Executes the download for a single asset binary file.
+ */
+async function downloadAssetBinary(assetMetadata) {
+    
+    // ⬅️ CRITICAL FIX: Ensure assetMetadata.path exists and is a string
+    const assetPath = assetMetadata["jcr:path"];
+    if (!assetPath || typeof assetPath !== 'string') {
+        console.error(`Skipping invalid asset record: Path is missing or invalid. Record:`, assetMetadata);
+        // Return success=true so Promise.all does not fail, but log the skip
+        return { success: true, path: 'Skipped Invalid Record', skipped: true }; 
+    }
+    
+    // In AEM, the original binary is usually accessible via a selector on the jcr:content/renditions/original node
+    const downloadUrl = `${assetPath}/_jcr_content/renditions/original`; 
+    
+    // ⬅️ The point where the original error occurred
+    const fileName = path.basename(assetPath);
+    const outputFile = path.join(ASSET_OUTPUT_DIR, fileName);
 
-/***** SCRIPT ENTRY POINT *****/
+    try {
+        console.log(`Downloading ${fileName} from ${assetPath}...`);
+        
+        // Fetch the binary data, setting responseType to 'stream' for efficiency
+        const response = await aemClient.get(downloadUrl, { 
+            responseType: 'stream' 
+        });
+        
+        // Pipe the response stream directly to a file
+        const writer = fsStandard.createWriteStream(outputFile);
+        response.data.pipe(writer);
 
-console.time('Download AEM assets');
+        await new Promise((resolve, reject) => {
+            writer.on('finish', resolve);
+            writer.on('error', reject);
+        });
+        
+        assetMetadata.localFilePath = outputFile;
+        
+        return { success: true, path: assetPath };
+        
+    } catch (error) {
+        console.error(`❌ Failed to download binary for ${assetPath}. Error: ${error.message}`);
+        // If download fails (e.g., 404), return failure
+        return { success: false, path: assetPath, error: error.message };
+    }
+}
 
-await downloadAssets({
-    aemPath: AEM_ASSETS_FOLDER,
-    localPath: LOCAL_DOWNLOAD_FOLDER
-}).catch(console.error);
 
-console.timeEnd('Download AEM assets');
+/**
+ * Main asset export function
+ */
+async function exportAemAssets() {
+  console.log('--- Starting AEM Asset Export ---');
+  
+  try {
+    await fs.mkdir(ASSET_OUTPUT_DIR, { recursive: true });
+    console.log(`✅ Output directory created at ${ASSET_OUTPUT_DIR}`);
+  } catch (error) {
+    console.error('Error creating asset directory:', error.message);
+    return;
+  }
+
+  // 1. Fetch the list of all asset metadata using QueryBuilder
+  let assets;
+  try {
+    console.log(`🔎 Fetching asset metadata from ${ASSET_QUERY_PARAMS.path}...`);
+    
+    const response = await aemClient.get('/bin/querybuilder.json', { params: ASSET_QUERY_PARAMS });
+    assets = response.data.hits; // The hits array contains full metadata
+
+    if (!assets || assets.length === 0) {
+      console.log('No assets found for the query. Check your ASSET_QUERY_PARAMS.');
+      return;
+    }
+    console.log(`✅ Found ${assets.length} assets. Starting concurrent downloads...`);
+  } catch (error) {
+    console.error('🛑 Error fetching asset metadata:', error.message);
+    return;
+  }
+
+  // 2. Loop through each asset and submit the download task to the concurrency limiter
+  const downloadPromises = assets.map(asset => {
+    // We use the limit function to control concurrency
+    return limit(() => downloadAssetBinary(asset));
+  });
+
+  // Wait for all downloads to finish
+  const results = await Promise.all(downloadPromises);
+
+  // 3. Save the consolidated metadata for the Sanity ingestion step
+  const metadataOutputPath = path.join(ASSET_OUTPUT_DIR, 'assets_metadata.json');
+  try {
+      await fs.writeFile(metadataOutputPath, JSON.stringify(assets, null, 2));
+      console.log(`✅ Asset metadata saved to ${metadataOutputPath}`);
+  } catch (e) {
+      console.error('Failed to save metadata file:', e.message);
+  }
+
+  // 4. Summarize results
+  const successful = results.filter(r => r.success).length;
+  const failed = results.filter(r => !r.success).length;
+
+  console.log('\n--- Asset Export Summary ---');
+  console.log(`✅ Total assets downloaded successfully: ${successful}`);
+  console.log(`🛑 Total assets failed to download: ${failed}`);
+  console.log('---');
+}
+
+// Run the main function
+exportAemAssets();
