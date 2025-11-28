@@ -7,10 +7,10 @@ This folder contains scripts to migrate data into the Sanity dataset. Each scrip
 1. **AEM Dataset Configuration**: Update the constants in the `constants/constant.js` file with your AEM project details:
 
   - AEM_HOST
-  - AEM_ACCESS_TOKEN
-  - AEM_ASSETS_FOLDER
-  - LOCAL_DOWNLOAD_FOLDER
-  - MAX_CONCURRENT_DOWNLOADS
+  - AEM_USER
+  - AEM_PASS
+  - OUTPUT_DIR
+
 
 2. **Dependencies**: Install the required dependencies by running:
    ```sh
@@ -21,6 +21,8 @@ This folder contains scripts to migrate data into the Sanity dataset. Each scrip
 
 1. Navigate to Terminal 
 - node export-assets.js
+- node export-content.js
 
 ## Notes
-- Make Sure You have access for downloading assets 
+- Make Sure You have access for downloading assets / Content in AEM HOST
+
