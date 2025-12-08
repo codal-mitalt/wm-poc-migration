@@ -2,7 +2,7 @@ import axios from 'axios';
 import { promises as fs } from 'fs';
 import path from 'path';
 import pLimit from 'p-limit';
-import CONSTANTS from "./constants.js";
+import CONSTANTS from "../../constants.js";
 import https from 'https';
 // --- Configuration ---
 const AEM_HOST = CONSTANTS.AEM_HOST;

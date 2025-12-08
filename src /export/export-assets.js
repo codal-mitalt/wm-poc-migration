@@ -3,7 +3,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import pLimit from 'p-limit';
 import https from 'https';
-import CONSTANTS from "./constants.js";
+import CONSTANTS from "../../constants.js";
 import fsStandard from 'fs';
 
 // --- Configuration ---
