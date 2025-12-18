@@ -29,4 +29,7 @@ This folder contains scripts to migrate data into the Sanity dataset. Each scrip
 
 ## Prerequisites for Mapping & Migration
 
-Constant 
+- Small Leaves Need to be Migrated First so those references need to give to parent Leaves / Rootes
+ ```sh
+node qaImport.js
+```
