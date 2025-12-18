@@ -2,7 +2,6 @@ import { createClient } from "@sanity/client";
 import { fetchByKey } from "../utils /fetchByKey.js";
 import {fetchBySubCategory}  from "../utils /fetchBySubCategory.js";
 import CONSTANTS from "../../../constants.js";
-import { randomBytes } from "crypto";
 
 const client = createClient({
   projectId: CONSTANTS.SANITY_STUDIO_PROJECT_ID,
@@ -13,110 +12,81 @@ const client = createClient({
 });
 
 
+const buildSlugSegment = (source) => {
+  if (!source) return '';
+  return source
+    .toString()
+    .replace(/^\/+/, '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+};
+
+
+async function getSanityQuestionIdByUrl(url) {
+  // Query Sanity for a QA document with the given URL
+  const query = '*[_type == "qa" && slug.current == $url][0]{_id}';
+  const params = { url };
+  const result = await client.fetch(query, params);
+  return result ? result._id : null;
+}
+
 function groupBySubCategory(dataArray) {
-  // Initialize the result object
   const groupedData = {};
-
-  // Loop through every item in your data array
   dataArray.forEach(item => {
-    // Check if subCategoryTags exists and is an array
     if (item.subCategoryTags && Array.isArray(item.subCategoryTags)) {
-      
-      // Loop through each tag in the subCategoryTags array
       item.subCategoryTags.forEach(tag => {
-        
-        // If this tag key doesn't exist in our result yet, initialize it as an empty array
-        if (!groupedData[tag]) {
-          groupedData[tag] = [];
-        }
-
-        // Push the current item into the array for this tag
+        if (!groupedData[tag]) groupedData[tag] = [];
         groupedData[tag].push(item);
       });
     }
   });
-
   return groupedData;
 }
 
-function mapSubcategoriesToReferences(dataArray, refMapperFn) {
-  const referenceMap = {};
-
-  dataArray.forEach(item => {
-    // Ensure the item has tags and a URL
-    if (item.subCategoryTags && Array.isArray(item.subCategoryTags) && item.url) {
-      
-      // Get the Sanity reference (or ID) for this specific item using your function
-      const sanityReference = refMapperFn(item.url);
-
-      // Add this reference to every category listed in subCategoryTags
-      item.subCategoryTags.forEach(tag => {
-        
-        // Initialize the array if the tag doesn't exist yet
-        if (!referenceMap[tag]) {
-          referenceMap[tag] = [];
-        }
-
-        // Push the result of your function call into the array
-        referenceMap[tag].push(sanityReference);
-      });
-    }
-  });
-
-  return referenceMap;
-}
 const createParentDocument = async () => {
   const data = await fetchByKey(
     "support",
     "../../data/aem_support/sample-qa.json"
   );
   console.log("Support data Count for Import", data?.length);
- const tempData = data.slice(0, 50);
-const temp = groupBySubCategory(tempData);
+  const tempData = data.slice(0, 50);
+  const grouped = groupBySubCategory(tempData);
 
- const migrationMap = mapSubcategoriesToReferences(temp, getsanityQuestionusingURL);
-console.log("Grouped Data by SubCategory^^^", migrationMap);
-  return;
-  //TODO Temporary Code
-//   const tempData = data.slice(0, 10);
-  // const tempData= data
-  if (tempData && tempData.length > 0) {
-    for (const element of tempData) {
-      const {
-       subCategoryTags,
-       url
-      } = element;
-      // Generate a secure random ID if _key is not present
-      const generateSecureId = () => "qa-" + randomBytes(9).toString("hex");
 
-      const questionArray = await fetchBySubCategory(
-                subCategoryTags[0],
-            );;
-
-            console.log("Question Array Length^^^", questionArray);
-
-            return;
-    
+  for (const [subCategory, questions] of Object.entries(grouped)) {
+    const primaryUrl = questions.find((item) => item.url)?.url || '';
+    // Build topics array of references
+    const topics = [];
+    for (const q of questions) {
+      if (q.url) {
+        const id = await getSanityQuestionIdByUrl(q.url);
+        if (id) {
+          topics.push({
+            _key: id,
+            _ref: id,
+            _type: "reference"
+          });
+        }
+      }
+    }
+    if (topics.length > 0) {
+      const slugSegment = buildSlugSegment(primaryUrl) || buildSlugSegment(subCategory) || 'subcategory';
       const subCategoryDocument = {
-        _id: generateSecureId(),
+        _id: `subcategory-${slugSegment}`,
         _type: "subcategoryOfSupport",
         region: "US-EN",
-        // slug: {
-        //   _type: "slug",
-        //   current: 
-        // },
-        // Todo Array check and assign to multiple 
-        title: subCategoryTags[0] ,
-        // Attach Questions Here
-        topics: [
-          {
-            _key: generateSecureId(),
-            _ref:sds,
-            _type: "reference",
-          },
-        ],
+        title: subCategory,
+        slug: {
+          _type: "slug",
+          current: slugSegment,
+        },
+        topics,
       };
-    await client.createOrReplace(subCategoryDocument);
+      await client.createOrReplace(subCategoryDocument);
+      console.log(`Created/updated subcategory: ${subCategory}`);
     }
   }
 };
