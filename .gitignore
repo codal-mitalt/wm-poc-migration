@@ -49,3 +49,9 @@ schema.json
 # storybook
 storybook-static
 *storybook.log
+
+/aem*
+
+src/export/aem*/
+
+
