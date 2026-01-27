@@ -70,17 +70,19 @@ const createParentDocument = async () => {
       
       const supportDocument = {
         _id: _key || generateSecureId(),
-        _type: "qa",
-        title: title ,
+        // _type: "qa",
+        _type: "support",
+
+        title: `Migrated ${title}` ,
         // TODO: Statics Value
-        region: "US-EN",
+        // region: "US-EN",
         // TODO: Slug should be URL or URL Path from AEM
         slug: {
           _type: "slug",
           current: url || "generated-slug",
         },
         // TODO: HTML Content in AEM for Summary but in Sanity as String
-        summary: summary || "",
+        // summary: summary || "",
         body: body
           ? convertHtmlToPortableText(body)
           : [],
